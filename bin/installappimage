@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <path-to-appimage>\n' "$(basename "$0")"
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 1
+fi
+
+input_path="$1"
+
+if [[ ! -f "$input_path" ]]; then
+  printf 'Error: file not found: %s\n' "$input_path" >&2
+  exit 1
+fi
+
+case "$input_path" in
+  *.AppImage|*.appimage|*.Appimage)
+    ;;
+  *)
+    printf 'Warning: file does not use a typical AppImage extension: %s\n' "$input_path" >&2
+    ;;
+esac
+
+install_dir="$HOME/.local/bin/appimages"
+desktop_dir="$HOME/.local/share/applications"
+
+mkdir -p "$install_dir" "$desktop_dir"
+
+input_abs="$(realpath "$input_path")"
+original_name="$(basename "$input_abs")"
+app_name="${original_name%.*}"
+
+# Keep desktop file name launcher-safe.
+desktop_slug="$(printf '%s' "$app_name" | tr '[:space:]' '-' | tr -cd '[:alnum:]_.-')"
+if [[ -z "$desktop_slug" ]]; then
+  desktop_slug="appimage-app"
+fi
+
+installed_path="$install_dir/$original_name"
+desktop_path="$desktop_dir/$desktop_slug.desktop"
+
+cp -f "$input_abs" "$installed_path"
+chmod +x "$installed_path"
+
+cat > "$desktop_path" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=$app_name
+Exec="$installed_path"
+Terminal=false
+Categories=Utility;
+X-AppImage-Integrate=false
+EOF
+
+chmod 0644 "$desktop_path"
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$desktop_dir" >/dev/null 2>&1 || true
+fi
+
+printf 'Installed AppImage: %s\n' "$installed_path"
+printf 'Desktop entry:      %s\n' "$desktop_path"
+printf 'You can now launch "%s" from your app launcher.\n' "$app_name"
