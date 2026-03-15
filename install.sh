@@ -2,42 +2,120 @@
 
 set -euo pipefail
 
-repo_root="$(pwd)"
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 bin_path="${repo_root}/bin"
 fish_source_dir="${repo_root}/fish"
 fish_config_dir="${HOME}/.config/fish"
 bash_line="export PATH=\"\$PATH:${bin_path}\""
 fish_bin_path_file="${fish_config_dir}/conf.d/system-config-bin-path.fish"
+package_list_file="${repo_root}/packages.sh"
+
+COMMON_PACKAGES=()
+DNF_PACKAGES=()
+APT_GET_PACKAGES=()
+PACMAN_PACKAGES=()
+ZYPPER_PACKAGES=()
+
+detect_package_manager() {
+    local manager
+
+    for manager in dnf apt-get pacman zypper; do
+        if command -v "${manager}" >/dev/null 2>&1; then
+            printf '%s\n' "${manager}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+install_with_package_manager() {
+    local manager="$1"
+    shift
+    local packages=("$@")
+
+    if [ "${#packages[@]}" -eq 0 ]; then
+        return
+    fi
+
+    case "${manager}" in
+        dnf)
+            sudo dnf install -y "${packages[@]}"
+            ;;
+        apt-get)
+            sudo apt-get update
+            sudo apt-get install -y "${packages[@]}"
+            ;;
+        pacman)
+            sudo pacman -Sy --noconfirm "${packages[@]}"
+            ;;
+        zypper)
+            sudo zypper --non-interactive install "${packages[@]}"
+            ;;
+        *)
+            echo "Unable to install packages automatically: unsupported package manager ${manager}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+load_package_lists() {
+    if [ ! -f "${package_list_file}" ]; then
+        echo "Package list file not found at ${package_list_file}; skipping extra package installation"
+        return
+    fi
+
+    # shellcheck disable=SC1090
+    source "${package_list_file}"
+}
 
 ensure_fish_installed() {
+    local package_manager
+
     if command -v fish >/dev/null 2>&1; then
         echo "fish is already installed"
         return
     fi
 
-    if command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y fish
+    if ! package_manager="$(detect_package_manager)"; then
+        echo "Unable to install fish automatically: unsupported package manager" >&2
+        exit 1
+    fi
+
+    install_with_package_manager "${package_manager}" fish
+}
+
+install_configured_packages() {
+    local package_manager
+    local packages=("${COMMON_PACKAGES[@]}")
+
+    if ! package_manager="$(detect_package_manager)"; then
+        echo "Unable to install configured packages automatically: unsupported package manager" >&2
+        exit 1
+    fi
+
+    case "${package_manager}" in
+        dnf)
+            packages+=("${DNF_PACKAGES[@]}")
+            ;;
+        apt-get)
+            packages+=("${APT_GET_PACKAGES[@]}")
+            ;;
+        pacman)
+            packages+=("${PACMAN_PACKAGES[@]}")
+            ;;
+        zypper)
+            packages+=("${ZYPPER_PACKAGES[@]}")
+            ;;
+    esac
+
+    if [ "${#packages[@]}" -eq 0 ]; then
+        echo "No extra packages configured for ${package_manager}"
         return
     fi
 
-    if command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y fish
-        return
-    fi
-
-    if command -v pacman >/dev/null 2>&1; then
-        sudo pacman -Sy --noconfirm fish
-        return
-    fi
-
-    if command -v zypper >/dev/null 2>&1; then
-        sudo zypper --non-interactive install fish
-        return
-    fi
-
-    echo "Unable to install fish automatically: unsupported package manager" >&2
-    exit 1
+    echo "Installing configured packages for ${package_manager}: ${packages[*]}"
+    install_with_package_manager "${package_manager}" "${packages[@]}"
 }
 
 ensure_fish_default_shell() {
@@ -82,7 +160,10 @@ link_repo_file() {
     echo "Linked ${target_path} -> ${source_path}"
 }
 
+load_package_lists
+
 ensure_fish_installed
+install_configured_packages
 
 # Preserve the original bash setup for shells that still read ~/.bashrc.
 if [ -f "${HOME}/.bashrc" ] && grep -Fqx "${bash_line}" "${HOME}/.bashrc"; then
