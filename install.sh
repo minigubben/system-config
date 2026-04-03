@@ -85,6 +85,16 @@ ensure_fish_installed() {
     install_with_package_manager "${package_manager}" fish
 }
 
+configure_keyboard() {
+    if ! command -v localectl >/dev/null 2>&1; then
+        echo "Skipping keyboard configuration: localectl is not available"
+        return
+    fi
+
+    sudo localectl set-x11-keymap us altgr-intl
+    echo "Configured X11 keyboard layout to us altgr-intl"
+}
+
 install_configured_packages() {
     local package_manager
     local packages=("${COMMON_PACKAGES[@]}")
@@ -164,6 +174,7 @@ load_package_lists
 
 ensure_fish_installed
 install_configured_packages
+configure_keyboard
 
 # Preserve the original bash setup for shells that still read ~/.bashrc.
 if [ -f "${HOME}/.bashrc" ] && grep -Fqx "${bash_line}" "${HOME}/.bashrc"; then
