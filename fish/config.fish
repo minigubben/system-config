@@ -28,18 +28,20 @@ function ssh --wraps=ssh --description "ssh with temporary terminal background c
     return $exit_code
 end
 
-set -gx PNPM_HOME "$HOME/.local/share/pnpm"
-if not string match -q -- $PNPM_HOME $PATH
-    set -gx PATH "$PNPM_HOME" $PATH
-end
-
 set -gx SSH_AUTH_SOCK "$XDG_RUNTIME_DIR/ssh-agent.socket"
 
 fish_add_path ~/.local/bin
 
-# pnpm
-set -gx PNPM_HOME "$HOME/.local/share/pnpm"
-if not string match -q -- $PNPM_HOME $PATH
-  set -gx PATH "$PNPM_HOME" $PATH
+set -gx FNM_DIR "$HOME/.local/share/fnm"
+if not contains -- $FNM_DIR $PATH
+    set -gx PATH "$FNM_DIR" $PATH
 end
-# pnpm end
+
+if test -x "$FNM_DIR/fnm"
+    fnm env --use-on-cd --shell fish | source
+end
+
+set -gx PNPM_HOME "$HOME/.local/share/pnpm"
+if not contains -- $PNPM_HOME $PATH
+    set -gx PATH "$PNPM_HOME" $PATH
+end
