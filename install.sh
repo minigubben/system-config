@@ -109,7 +109,7 @@ configure_keyboard() {
         return
     fi
 
-    sudo localectl set-x11-keymap us altgr-intl
+    sudo localectl set-x11-keymap us microsoftpro altgr-intl terminate:ctrl_alt_bksp
     echo "Configured X11 keyboard layout to us altgr-intl"
 }
 
