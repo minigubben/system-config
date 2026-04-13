@@ -34,3 +34,8 @@ if not string match -q -- $PNPM_HOME $PATH
 end
 
 fish_add_path ~/.local/bin
+
+# Added by LM Studio CLI (lms)
+set -gx PATH $PATH /home/minigubben/.lmstudio/bin
+# End of LM Studio CLI section
+

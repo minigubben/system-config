@@ -1,0 +1,192 @@
+#!/bin/bash
+
+set -euo pipefail
+
+temp_paths=()
+
+cleanup_import_github_autorized_keys() {
+    local temp_path
+
+    for temp_path in "${temp_paths[@]}"; do
+        if [ -e "${temp_path}" ]; then
+            rm -f "${temp_path}"
+        fi
+    done
+}
+
+new_temp_file() {
+    local temp_path
+
+    temp_path="$(mktemp)"
+    temp_paths+=("${temp_path}")
+    printf '%s\n' "${temp_path}"
+}
+
+print_usage() {
+    printf 'Usage: %s <github-user> [<github-user> ...]\n' "$(basename "$0")"
+}
+
+fetch_github_keys() {
+    local github_user="$1"
+    local output_path="$2"
+    local keys_url="https://github.com/${github_user}.keys"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --show-error --location "${keys_url}" -o "${output_path}"
+        return $?
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        wget --quiet -O "${output_path}" "${keys_url}"
+        return $?
+    fi
+
+    printf 'Error: curl or wget is required to fetch GitHub keys.\n' >&2
+    return 1
+}
+
+trim_whitespace() {
+    local value="$1"
+
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "${value}"
+}
+
+key_identity_from_line() {
+    local line="$1"
+    local -a fields=()
+    local index
+
+    read -r -a fields <<< "${line}"
+
+    for ((index = 0; index + 1 < ${#fields[@]}; index++)); do
+        case "${fields[index]}" in
+            ssh-rsa|ssh-dss|ssh-ed25519|ecdsa-sha2-*|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-*@openssh.com)
+                printf '%s %s\n' "${fields[index]}" "${fields[index + 1]}"
+                return 0
+                ;;
+        esac
+    done
+
+    printf '%s\n' "${line}"
+}
+
+dedupe_keys_into_file() {
+    local input_path="$1"
+    local output_path="$2"
+    local line
+    local identity
+
+    : > "${output_path}"
+
+    while IFS= read -r line || [ -n "${line}" ]; do
+        line="$(trim_whitespace "${line}")"
+        if [ -z "${line}" ]; then
+            continue
+        fi
+
+        identity="$(key_identity_from_line "${line}")"
+        if [ -z "${seen_key_identities["${identity}"]+x}" ]; then
+            seen_key_identities["${identity}"]=1
+            printf '%s\n' "${line}" >> "${output_path}"
+        fi
+    done < "${input_path}"
+}
+
+append_new_keys_from_file() {
+    local input_path="$1"
+    local output_path="$2"
+    local line
+    local identity
+    local added_count=0
+
+    while IFS= read -r line || [ -n "${line}" ]; do
+        line="$(trim_whitespace "${line}")"
+        if [ -z "${line}" ]; then
+            continue
+        fi
+
+        identity="$(key_identity_from_line "${line}")"
+        if [ -z "${seen_key_identities["${identity}"]+x}" ]; then
+            seen_key_identities["${identity}"]=1
+            printf '%s\n' "${line}" >> "${output_path}"
+            added_count=$((added_count + 1))
+        fi
+    done < "${input_path}"
+
+    APPENDED_KEYS_COUNT="${added_count}"
+}
+
+trap cleanup_import_github_autorized_keys EXIT
+
+if [ "$#" -eq 0 ]; then
+    print_usage >&2
+    exit 1
+fi
+
+ssh_dir="${HOME}/.ssh"
+autorized_keys_path="${ssh_dir}/autorized_keys"
+
+if [ -e "${ssh_dir}" ] && [ ! -d "${ssh_dir}" ]; then
+    printf 'Error: %s exists but is not a directory.\n' "${ssh_dir}" >&2
+    exit 1
+fi
+
+mkdir -p "${ssh_dir}"
+chmod 700 "${ssh_dir}"
+
+if [ -e "${autorized_keys_path}" ] && [ -d "${autorized_keys_path}" ]; then
+    printf 'Error: %s exists but is a directory.\n' "${autorized_keys_path}" >&2
+    exit 1
+fi
+
+if [ ! -e "${autorized_keys_path}" ]; then
+    touch "${autorized_keys_path}"
+fi
+
+chmod 600 "${autorized_keys_path}"
+
+declare -A seen_key_identities=()
+APPENDED_KEYS_COUNT=0
+
+existing_keys_path="$(new_temp_file)"
+dedupe_keys_into_file "${autorized_keys_path}" "${existing_keys_path}"
+
+imported_key_count=0
+updated_users=0
+
+for github_user in "$@"; do
+    github_user="${github_user#"${github_user%%[![:space:]]*}"}"
+    github_user="${github_user%"${github_user##*[![:space:]]}"}"
+
+    if [ -z "${github_user}" ]; then
+        continue
+    fi
+
+    fetched_keys_path="$(new_temp_file)"
+    if ! fetch_github_keys "${github_user}" "${fetched_keys_path}"; then
+        exit 1
+    fi
+
+    if [ ! -s "${fetched_keys_path}" ]; then
+        printf 'Error: no public keys found for GitHub user %s.\n' "${github_user}" >&2
+        exit 1
+    fi
+
+    append_new_keys_from_file "${fetched_keys_path}" "${existing_keys_path}"
+    new_keys_for_user="${APPENDED_KEYS_COUNT}"
+
+    if [ "${new_keys_for_user}" -gt 0 ]; then
+        imported_key_count=$((imported_key_count + new_keys_for_user))
+        updated_users=$((updated_users + 1))
+        printf 'Imported %s new key(s) for GitHub user %s.\n' "${new_keys_for_user}" "${github_user}"
+    else
+        printf 'No new keys to import for GitHub user %s.\n' "${github_user}"
+    fi
+done
+
+mv "${existing_keys_path}" "${autorized_keys_path}"
+chmod 600 "${autorized_keys_path}"
+
+printf 'autorized_keys updated at %s with %s new key(s) across %s user(s).\n' "${autorized_keys_path}" "${imported_key_count}" "${updated_users}"
