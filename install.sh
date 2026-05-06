@@ -184,6 +184,86 @@ ensure_managed_block() {
     mv "${tmp_file}" "${file_path}"
 }
 
+backup_path_for() {
+    local file_path="$1"
+    local backup_path="${file_path}.bak"
+    local index=1
+
+    while [ -e "${backup_path}" ] || [ -L "${backup_path}" ]; do
+        backup_path="${file_path}.bak.${index}"
+        index=$((index + 1))
+    done
+
+    printf '%s\n' "${backup_path}"
+}
+
+backup_existing_path() {
+    local file_path="$1"
+    local backup_path
+
+    backup_path="$(backup_path_for "${file_path}")"
+    mv "${file_path}" "${backup_path}"
+    echo "Backed up existing ${file_path} to ${backup_path}"
+}
+
+extract_lm_studio_block() {
+    local file_path="$1"
+
+    if [ ! -r "${file_path}" ]; then
+        return 0
+    fi
+
+    awk '
+        $0 == "# Added by LM Studio CLI (lms)" { capture = 1 }
+        capture { print }
+        $0 == "# End of LM Studio CLI section" { exit }
+    ' "${file_path}"
+}
+
+ensure_fish_main_config() {
+    local current_target
+    local migrated_lm_studio_block=""
+
+    mkdir -p "$(dirname "${fish_main_config_path}")"
+
+    if [ -L "${fish_main_config_path}" ]; then
+        current_target="$(readlink "${fish_main_config_path}")"
+
+        if [ "${current_target}" = "${fish_legacy_config_path}" ]; then
+            migrated_lm_studio_block="$(extract_lm_studio_block "${fish_main_config_path}")"
+            rm "${fish_main_config_path}"
+            echo "Removed legacy fish config symlink ${fish_main_config_path}"
+        else
+            backup_existing_path "${fish_main_config_path}"
+        fi
+    fi
+
+    touch "${fish_main_config_path}"
+    ensure_managed_block "${fish_main_config_path}" "system-config local overrides" "${fish_config_local_block}"
+
+    if [ -n "${migrated_lm_studio_block}" ]; then
+        ensure_managed_block "${fish_local_config_path}" "lm studio cli" "${migrated_lm_studio_block}"
+        echo "Migrated LM Studio shell block to ${fish_local_config_path}"
+    fi
+}
+
+link_fish_conf_d_files() {
+    local source_path
+
+    shopt -s nullglob
+    for source_path in "${fish_conf_d_source_dir}"/*.fish; do
+        link_repo_file "${source_path}" "${fish_config_dir}/conf.d/$(basename "${source_path}")"
+    done
+    shopt -u nullglob
+}
+
+cleanup_legacy_fish_node_snippets() {
+    if [ -f "${legacy_fish_fnm_file}" ] && grep -Fq 'fnm env --shell fish | source' "${legacy_fish_fnm_file}"; then
+        backup_existing_path "${legacy_fish_fnm_file}"
+        echo "Backed up legacy fnm fish snippet from ${legacy_fish_fnm_file}"
+    fi
+}
+
 install_fnm() {
     local fnm_bin="${fnm_install_dir}/fnm"
 
