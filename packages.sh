@@ -7,6 +7,8 @@ COMMON_PACKAGES=(
     "curl"
     "vim"
     "screen"
+    "bash"
+    "make"
 )
 
 DNF_PACKAGES=(

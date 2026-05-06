@@ -3,29 +3,19 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-bin_path="${repo_root}/bin"
-fish_source_dir="${repo_root}/fish"
-fish_config_dir="${HOME}/.config/fish"
+bash_config_source="${repo_root}/bash/config.bash"
+starship_config_source="${repo_root}/starship/starship.toml"
 bashrc_path="${HOME}/.bashrc"
-bash_line="export PATH=\"\$PATH:${bin_path}\""
-bash_node_tools_block="$(cat <<'EOF'
-export FNM_DIR="$HOME/.local/share/fnm"
-if [ -d "$FNM_DIR" ]; then
-    export PATH="$FNM_DIR:$PATH"
+bash_config_block="$(cat <<EOF
+if [ -r "${bash_config_source}" ]; then
+    . "${bash_config_source}"
 fi
-if command -v fnm >/dev/null 2>&1; then
-    eval "$(fnm env --use-on-cd --shell bash)"
-fi
-
-export PNPM_HOME="$HOME/.local/share/pnpm"
-case ":$PATH:" in
-    *":$PNPM_HOME:"*) ;;
-    *) export PATH="$PNPM_HOME:$PATH" ;;
-esac
 EOF
 )"
 fnm_install_dir="${HOME}/.local/share/fnm"
-fish_bin_path_file="${fish_config_dir}/conf.d/system-config-bin-path.fish"
+starship_config_dir="${HOME}/.config"
+blesh_source_dir="${HOME}/.local/src/blesh"
+blesh_install_dir="${HOME}/.local/share/blesh"
 package_list_file="${repo_root}/packages.sh"
 
 COMMON_PACKAGES=()
@@ -87,22 +77,6 @@ load_package_lists() {
     source "${package_list_file}"
 }
 
-ensure_fish_installed() {
-    local package_manager
-
-    if command -v fish >/dev/null 2>&1; then
-        echo "fish is already installed"
-        return
-    fi
-
-    if ! package_manager="$(detect_package_manager)"; then
-        echo "Unable to install fish automatically: unsupported package manager" >&2
-        exit 1
-    fi
-
-    install_with_package_manager "${package_manager}" fish
-}
-
 configure_keyboard() {
     if ! command -v localectl >/dev/null 2>&1; then
         echo "Skipping keyboard configuration: localectl is not available"
@@ -146,25 +120,25 @@ install_configured_packages() {
     install_with_package_manager "${package_manager}" "${packages[@]}"
 }
 
-ensure_fish_default_shell() {
+ensure_bash_default_shell() {
     local current_shell
-    local fish_path
+    local bash_path
 
     current_shell="$(getent passwd "${USER}" | cut -d: -f7)"
-    fish_path="$(command -v fish)"
+    bash_path="$(command -v bash)"
 
-    if [ "${current_shell}" = "${fish_path}" ]; then
-        echo "fish is already the default shell"
+    if [ "${current_shell}" = "${bash_path}" ]; then
+        echo "bash is already the default shell"
         return
     fi
 
-    if ! grep -Fqx "${fish_path}" /etc/shells; then
-        echo "Adding ${fish_path} to /etc/shells"
-        echo "${fish_path}" | sudo tee -a /etc/shells >/dev/null
+    if ! grep -Fqx "${bash_path}" /etc/shells; then
+        echo "Adding ${bash_path} to /etc/shells"
+        echo "${bash_path}" | sudo tee -a /etc/shells >/dev/null
     fi
 
-    chsh -s "${fish_path}"
-    echo "Set default shell to ${fish_path}"
+    chsh -s "${bash_path}"
+    echo "Set default shell to ${bash_path}"
 }
 
 link_repo_file() {
@@ -186,20 +160,6 @@ link_repo_file() {
 
     ln -sfn "${source_path}" "${target_path}"
     echo "Linked ${target_path} -> ${source_path}"
-}
-
-ensure_line_present() {
-    local file_path="$1"
-    local line="$2"
-
-    mkdir -p "$(dirname "${file_path}")"
-    touch "${file_path}"
-
-    if grep -Fqx "${line}" "${file_path}"; then
-        return
-    fi
-
-    printf '%s\n' "${line}" >> "${file_path}"
 }
 
 ensure_managed_block() {
@@ -242,6 +202,51 @@ install_fnm() {
     echo "Installed fnm to ${fnm_install_dir}"
 }
 
+install_starship() {
+    if command -v starship >/dev/null 2>&1; then
+        echo "starship is already installed"
+        return
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Unable to install starship automatically: curl is not available" >&2
+        exit 1
+    fi
+
+    mkdir -p "${HOME}/.local/bin"
+    curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "${HOME}/.local/bin"
+    echo "Installed starship to ${HOME}/.local/bin"
+}
+
+install_blesh() {
+    if [ -r "${blesh_install_dir}/ble.sh" ]; then
+        echo "ble.sh is already installed at ${blesh_install_dir}/ble.sh"
+        return
+    fi
+
+    if ! command -v git >/dev/null 2>&1; then
+        echo "Unable to install ble.sh automatically: git is not available" >&2
+        exit 1
+    fi
+
+    if ! command -v make >/dev/null 2>&1; then
+        echo "Unable to install ble.sh automatically: make is not available" >&2
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "${blesh_source_dir}")"
+
+    if [ -d "${blesh_source_dir}/.git" ]; then
+        git -C "${blesh_source_dir}" pull --ff-only
+        git -C "${blesh_source_dir}" submodule update --init --recursive
+    else
+        git clone --recursive --depth 1 https://github.com/akinomyoga/ble.sh.git "${blesh_source_dir}"
+    fi
+
+    make -C "${blesh_source_dir}" install PREFIX="${HOME}/.local"
+    echo "Installed ble.sh to ${blesh_install_dir}"
+}
+
 install_node_and_pnpm() {
     local fnm_bin="${fnm_install_dir}/fnm"
     local current_node
@@ -273,30 +278,17 @@ install_node_and_pnpm() {
 
 load_package_lists
 
-ensure_fish_installed
 install_configured_packages
 configure_keyboard
 install_fnm
 install_node_and_pnpm
+install_starship
+install_blesh
 
-# Preserve the original bash setup for shells that still read ~/.bashrc.
-if [ -f "${bashrc_path}" ] && grep -Fqx "${bash_line}" "${bashrc_path}"; then
-    echo "${bin_path} is already in PATH in ~/.bashrc"
-else
-    ensure_line_present "${bashrc_path}" "${bash_line}"
-    echo "Added ${bin_path} to PATH in ~/.bashrc"
-fi
+ensure_managed_block "${bashrc_path}" "system-config bash config" "${bash_config_block}"
+echo "Installed Bash shell setup in ~/.bashrc"
 
-ensure_managed_block "${bashrc_path}" "system-config node tools" "${bash_node_tools_block}"
-echo "Installed Node.js shell setup in ~/.bashrc"
+mkdir -p "${starship_config_dir}"
+link_repo_file "${starship_config_source}" "${starship_config_dir}/starship.toml"
 
-mkdir -p "${fish_config_dir}" "${fish_config_dir}/conf.d" "${fish_config_dir}/functions"
-
-link_repo_file "${fish_source_dir}/config.fish" "${fish_config_dir}/config.fish"
-link_repo_file "${fish_source_dir}/functions/fish_prompt.fish" "${fish_config_dir}/functions/fish_prompt.fish"
-printf 'fish_add_path -g %q\n' "${bin_path}" > "${fish_bin_path_file}"
-
-echo "Linked fish config into ${fish_config_dir}"
-echo "Installed ${bin_path} PATH hook to ${fish_bin_path_file}"
-
-ensure_fish_default_shell
+ensure_bash_default_shell

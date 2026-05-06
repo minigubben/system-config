@@ -1,0 +1,32 @@
+add_newline = false
+
+format = "$directory$git_branch$git_status\n$character"
+
+[character]
+success_symbol = "[>](bold green)"
+error_symbol = "[>](bold red)"
+vimcmd_symbol = "[<](bold yellow)"
+
+[directory]
+style = "bold cyan"
+truncation_length = 3
+truncate_to_repo = false
+
+[git_branch]
+format = " [$symbol$branch]($style)"
+style = "bold purple"
+symbol = "git:"
+
+[git_status]
+format = " [status:$all_status$ahead_behind]($style)"
+style = "bold yellow"
+conflicted = "conflict "
+ahead = "ahead "
+behind = "behind "
+diverged = "diverged "
+untracked = "untracked "
+stashed = "stashed "
+modified = "modified "
+staged = "staged "
+renamed = "renamed "
+deleted = "deleted "
