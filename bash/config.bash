@@ -18,7 +18,7 @@ __system_config_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 __system_config_path_prepend "$__system_config_root/bin"
 export PATH
 
-alias opencode="$HOME/utveckling_git/opencode-docker/start-cli.sh ."
+alias lg='ls | grep'
 
 ssh() {
     printf '\033]11;#8B4000\007'
