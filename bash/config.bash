@@ -19,6 +19,7 @@ __system_config_path_prepend "$__system_config_root/bin"
 export PATH
 
 alias lg='ls | grep'
+alias qf='find . -name $1'
 
 ssh() {
     printf '\033]11;#8B4000\007'
