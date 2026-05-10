@@ -1,0 +1,159 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s\n' "$0")
+SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+
+if [ "${SGPT_ENV_FILE:-}" ]; then
+  ENV_FILE=$SGPT_ENV_FILE
+elif [ -f .env ]; then
+  ENV_FILE=.env
+else
+  ENV_FILE="$SCRIPT_DIR/.env"
+fi
+
+usage() {
+  printf 'Usage: sgpt "question"\n' >&2
+  printf '       command | sgpt "question about the command output"\n' >&2
+  printf 'Set OPENCODE_ZEN_API_KEY or SGPT_API_KEY before running.\n' >&2
+}
+
+stdin_file=
+request_file=
+cleanup() {
+  if [ -n "$stdin_file" ]; then
+    rm -f "$stdin_file"
+  fi
+  if [ -n "$request_file" ]; then
+    rm -f "$request_file"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+if [ ! -t 0 ]; then
+  stdin_file=$(mktemp "${TMPDIR:-/tmp}/sgpt.stdin.XXXXXX")
+  cat >"$stdin_file"
+fi
+
+if [ "$#" -eq 0 ] && { [ -z "$stdin_file" ] || [ ! -s "$stdin_file" ]; }; then
+  usage
+  exit 2
+fi
+
+if [ -f "$ENV_FILE" ]; then
+  env_values=$(python3 - "$ENV_FILE" <<'PY'
+import shlex
+import sys
+
+wanted = {"SGPT_API_KEY", "OPENCODE_ZEN_API_KEY", "SGPT_MODEL", "SGPT_API_URL"}
+
+with open(sys.argv[1], encoding="utf-8") as env_file:
+    for raw_line in env_file:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in wanted:
+            continue
+
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+
+        print(f"{key}={shlex.quote(value)}")
+PY
+  )
+  if [ -n "$env_values" ]; then
+    eval "$env_values"
+  fi
+fi
+
+API_URL="${SGPT_API_URL:-https://opencode.ai/zen/v1/responses}"
+MODEL="${SGPT_MODEL:-gpt-5.4-mini}"
+API_KEY="${SGPT_API_KEY:-${OPENCODE_ZEN_API_KEY:-}}"
+if [ -z "$API_KEY" ]; then
+  printf 'sgpt: missing API key; set OPENCODE_ZEN_API_KEY or SGPT_API_KEY\n' >&2
+  exit 2
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  printf 'sgpt: curl is not installed or not on PATH\n' >&2
+  exit 127
+fi
+
+question=$*
+os_info=$(
+  {
+    printf 'uname: '
+    uname -a 2>/dev/null || printf 'unknown'
+    if [ -r /etc/os-release ]; then
+      printf '\n/etc/os-release:\n'
+      sed -n '1,12p' /etc/os-release 2>/dev/null || true
+    fi
+  } | sed 's/[[:cntrl:]]//g'
+)
+
+request_file=$(mktemp "${TMPDIR:-/tmp}/sgpt.request.XXXXXX")
+QUESTION="$question" MODEL="$MODEL" OS_INFO="$os_info" python3 - "$stdin_file" >"$request_file" <<'PY'
+import json
+import os
+import sys
+
+prompt = """Answer the question directly. Output only the response, with no preamble.
+
+OS context:
+""" + os.environ["OS_INFO"] + """
+
+Question:
+""" + os.environ["QUESTION"]
+
+stdin_file = sys.argv[1]
+if stdin_file and os.path.getsize(stdin_file) > 0:
+    with open(stdin_file, encoding="utf-8") as input_file:
+        stdin_input = input_file.read()
+    prompt += """
+
+Piped input:
+""" + stdin_input
+
+print(json.dumps({
+    "model": os.environ["MODEL"],
+    "input": prompt,
+}))
+PY
+
+response=$(
+  curl -fsS "$API_URL" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$request_file"
+)
+
+printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+if data.get("output_text"):
+    print(data["output_text"])
+    raise SystemExit
+
+parts = []
+for item in data.get("output", []):
+    for content in item.get("content", []):
+        if "text" in content:
+            parts.append(content["text"])
+
+if parts:
+    print("\n".join(parts))
+else:
+    json.dump(data, sys.stdout)
+    print()
+'
